@@ -16,7 +16,14 @@
 您可以使用一行命令来安装此工具：
 
 ```bash
+# 安装最新版本（main分支）
 curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/main/scripts/install.sh | sh
+
+# 安装特定版本（例如 v1.1.0）
+curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/v1.1.0/scripts/install.sh | sh
+
+# 或使用环境变量指定版本
+INSTALL_VERSION=v1.2.0 curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/main/scripts/install.sh | sh
 ```
 
 这将会创建一个名为 `docker` 的可执行命令到您的系统路径中。安装后，您只需输入 `docker` 即可运行此工具。
@@ -191,11 +198,55 @@ curl --version && tar --version && proot --version
 docker --verbose run alpine:latest
 ```
 
+### Android常见问题
+
+#### 权限拒绝错误
+
+如果遇到权限错误，例如：
+```
+nginx: [alert] could not open error log file: open() "/var/log/nginx/error.log" failed (13: Permission denied)
+```
+
+**解决方案**：工具会在Android上自动创建可写的系统目录。请确保使用最新版本。
+
+#### Whiteout文件警告
+
+如果看到关于 `.wh.auxfiles` 或类似whiteout文件的警告：
+```
+tar: ./var/lib/apt/lists/.wh.auxfiles: Cannot open: Permission denied
+```
+
+**解决方案**：这些文件在Android上会被自动跳过。层删除语义可能不完全保留，但容器可以正常运行。
+
+#### 提取失败
+
+如果镜像提取失败：
+- 使用 `--verbose` 标志查看详细错误信息
+- 检查Termux中的可用磁盘空间
+- 先尝试拉取较小的镜像（例如 `alpine:latest`）
+- 确保所有依赖已安装：`pkg install python proot curl tar`
+
+#### 容器启动问题
+
+如果容器启动失败：
+- 使用 `docker logs <container_id>` 查看日志
+- 验证镜像是否与您的架构兼容
+- 某些镜像可能需要proot中不可用的特定功能
+- 尝试使用 `--verbose` 运行以获取详细调试信息
+
 ## 限制说明
 
 - 基于 `proot`，并非完整的容器化（无内核级的进程或网络隔离）。
 - 某些系统调用可能不被支持。
 - 性能相较于原生 Docker 会有所下降。
+- 网络隔离有限。
+
+### Android特定限制
+
+- **Whiteout文件**：由于Android权限限制，Docker层删除语义（whiteout文件）会被跳过。这意味着从前一层删除的文件可能仍然存在于最终容器文件系统中。
+- **系统目录**：可写系统目录（`/var/log`、`/var/cache`、`/tmp` 等）会自动从主机存储绑定挂载，以解决Android权限限制。
+- **文件权限**：某些文件权限和所有权操作在Android文件系统上可能无法按预期工作。
+- **进程隔离**：proot提供进程隔离但不是完整的容器化。容器共享相同的内核，资源隔离有限。
 
 ## 许可证
 

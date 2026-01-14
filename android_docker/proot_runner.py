@@ -364,7 +364,7 @@ class ProotRunner:
         return '/'
     
     def _build_proot_command(self, args):
-        """构建proot命令"""
+        """构建proot命令（增强Android支持）"""
         cmd = ['proot']
 
         # 基本选项
@@ -388,6 +388,14 @@ class ProotRunner:
                 '/sdcard',
                 '/system/etc/resolv.conf:/etc/resolv.conf'
             ])
+
+            # 添加可写系统目录绑定
+            if hasattr(args, 'rootfs_dir') and args.rootfs_dir:
+                # 使用rootfs_dir的父目录作为container_dir
+                container_dir = os.path.dirname(args.rootfs_dir)
+                writable_binds = self._prepare_writable_directories(container_dir)
+                default_binds.extend(writable_binds)
+                logger.info("已启用Android可写目录支持")
 
         for bind in default_binds:
             if ':' in bind:
@@ -491,15 +499,62 @@ class ProotRunner:
         return '/startup.sh'
     
     def _is_android_environment(self):
-        """检测是否在Android环境中运行"""
+        """检测是否在Android环境中运行（增强版）"""
         android_indicators = [
             '/data/data/com.termux' in os.getcwd(),
             os.path.exists('/system/build.prop'),
             os.environ.get('ANDROID_DATA') is not None,
-            os.environ.get('TERMUX_VERSION') is not None
+            os.environ.get('TERMUX_VERSION') is not None,
+            os.path.exists('/data/data/com.termux'),
+            'com.termux' in os.environ.get('PREFIX', ''),
         ]
         
-        return any(android_indicators)
+        is_android = any(android_indicators)
+        
+        if is_android:
+            logger.debug("检测到Android/Termux环境")
+        
+        return is_android
+
+    def _prepare_writable_directories(self, container_dir):
+        """为Android环境准备可写的系统目录"""
+        if not self._is_android_environment():
+            return []
+
+        # 需要可写的系统目录列表
+        writable_dirs = [
+            'var/log',
+            'var/cache',
+            'var/tmp',
+            'tmp',
+            'run',
+        ]
+
+        # 在容器持久化目录中创建可写目录
+        writable_storage = os.path.join(container_dir, 'writable_dirs')
+        os.makedirs(writable_storage, exist_ok=True)
+
+        bind_mounts = []
+
+        for dir_path in writable_dirs:
+            # 创建主机侧的可写目录
+            host_dir = os.path.join(writable_storage, dir_path.replace('/', '_'))
+            os.makedirs(host_dir, exist_ok=True)
+
+            # 设置权限
+            try:
+                os.chmod(host_dir, 0o777)  # 完全可写
+            except OSError:
+                pass
+
+            # 添加到绑定挂载列表
+            container_path = f"/{dir_path}"
+            bind_mounts.append(f"{host_dir}:{container_path}")
+
+            logger.debug(f"准备可写目录: {host_dir} -> {container_path}")
+
+        logger.info(f"已准备 {len(bind_mounts)} 个可写系统目录")
+        return bind_mounts
 
     def _prepare_environment(self):
         """准备运行环境，处理Android Termux特殊问题"""
@@ -535,6 +590,10 @@ class ProotRunner:
             # 检查依赖
             if not self._check_dependencies():
                 return False
+
+            # 在Android环境中显示警告
+            if self._is_android_environment():
+                logger.warning("在Android环境中运行容器。注意：proot提供进程隔离，而非完整的容器化。某些系统调用可能不受支持，性能可能低于原生Docker。")
 
             # 准备根文件系统（下载或使用现有）
             logger.info("准备根文件系统...")

@@ -16,7 +16,14 @@ A tool to run Docker images on Android using `proot`, without needing a Docker e
 You can install this tool with a single command:
 
 ```bash
+# Install latest version (main branch)
 curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/main/scripts/install.sh | sh
+
+# Install specific version (e.g., v1.1.0)
+curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/v1.1.0/scripts/install.sh | sh
+
+# Or use environment variable to specify version
+INSTALL_VERSION=v1.2.0 curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/main/scripts/install.sh | sh
 ```
 
 This will create an executable `docker` command in your path. After installation, you can run the tool by simply typing `docker`.
@@ -191,11 +198,55 @@ curl --version && tar --version && proot --version
 docker --verbose run alpine:latest
 ```
 
+### Common Android Issues
+
+#### Permission Denied Errors
+
+If you encounter permission errors like:
+```
+nginx: [alert] could not open error log file: open() "/var/log/nginx/error.log" failed (13: Permission denied)
+```
+
+**Solution**: The tool automatically creates writable system directories on Android. Ensure you're using the latest version.
+
+#### Whiteout File Warnings
+
+If you see warnings about `.wh.auxfiles` or similar whiteout files:
+```
+tar: ./var/lib/apt/lists/.wh.auxfiles: Cannot open: Permission denied
+```
+
+**Solution**: These files are automatically skipped on Android. Layer deletion semantics may not be fully preserved, but containers will run normally.
+
+#### Extraction Failures
+
+If image extraction fails:
+- Use `--verbose` flag to see detailed error messages
+- Check available disk space in Termux
+- Try pulling a smaller image first (e.g., `alpine:latest`)
+- Ensure all dependencies are installed: `pkg install python proot curl tar`
+
+#### Container Startup Issues
+
+If containers fail to start:
+- Check logs with `docker logs <container_id>`
+- Verify the image is compatible with your architecture
+- Some images may require specific capabilities not available in proot
+- Try running with `--verbose` for detailed debugging information
+
 ## Limitations
 
 - Based on `proot`, not full containerization (no kernel-level process or network isolation).
 - Some system calls may not be supported.
 - Performance is lower compared to native Docker.
+- Network isolation is limited.
+
+### Android-Specific Limitations
+
+- **Whiteout Files**: Docker layer deletion semantics (whiteout files) are skipped on Android due to permission restrictions. This means deleted files from previous layers may still be present in the final container filesystem.
+- **System Directories**: Writable system directories (`/var/log`, `/var/cache`, `/tmp`, etc.) are automatically bind-mounted from host storage to work around Android permission restrictions.
+- **File Permissions**: Some file permission and ownership operations may not work as expected on Android filesystems.
+- **Process Isolation**: proot provides process isolation but not full containerization. Containers share the same kernel and have limited resource isolation.
 
 ## License
 

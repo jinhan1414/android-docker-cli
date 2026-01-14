@@ -848,6 +848,12 @@ class DockerCLI:
                 import shutil
                 shutil.rmtree(container_dir)
                 logger.debug(f"已清理容器目录: {container_dir}")
+                
+                # 清理writable_dirs（如果存在）
+                writable_dirs_path = os.path.join(os.path.dirname(container_dir), 'writable_dirs')
+                if os.path.isdir(writable_dirs_path):
+                    shutil.rmtree(writable_dirs_path)
+                    logger.debug(f"已清理可写目录: {writable_dirs_path}")
             except OSError as e:
                 logger.warning(f"清理容器目录失败 {container_dir}: {e}")
 

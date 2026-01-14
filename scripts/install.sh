@@ -10,6 +10,29 @@ CMD_PATH="$PREFIX/bin/$CMD_NAME"
 DOCKER_COMPOSE_CMD_NAME="docker-compose"
 DOCKER_COMPOSE_CMD_PATH="$PREFIX/bin/$DOCKER_COMPOSE_CMD_NAME"
 
+# --- Version Detection ---
+# Detect version from script URL or environment variable
+# Priority: INSTALL_VERSION env var > URL path > "main"
+INSTALL_VERSION="${INSTALL_VERSION:-}"
+
+if [ -z "$INSTALL_VERSION" ]; then
+    # Try to detect from script URL (if available via $0 or other means)
+    # This works when script is piped from curl
+    if [ -n "$BASH_SOURCE" ]; then
+        SCRIPT_URL="$BASH_SOURCE"
+    else
+        SCRIPT_URL="${0}"
+    fi
+    
+    # Extract version from URL pattern like /v1.1.0/ or /v1.2.0/
+    INSTALL_VERSION=$(echo "$SCRIPT_URL" | grep -oE '/v[0-9]+\.[0-9]+\.[0-9]+/' | tr -d '/')
+fi
+
+# Default to "main" if no version detected
+if [ -z "$INSTALL_VERSION" ]; then
+    INSTALL_VERSION="main"
+fi
+
 # --- Helper Functions ---
 echo_info() {
     echo "[INFO] $1"
@@ -24,6 +47,7 @@ echo_error() {
 
 # 1. Welcome Message
 echo_info "Starting installation of android-docker-cli..."
+echo_info "Installing version: $INSTALL_VERSION"
 
 # 2. Check Dependencies
 echo_info "Checking dependencies..."
@@ -40,7 +64,20 @@ if [ -d "$INSTALL_DIR" ]; then
     rm -rf "$INSTALL_DIR"
 fi
 echo_info "Cloning repository into $INSTALL_DIR..."
-git clone "$GITHUB_REPO" "$INSTALL_DIR"
+
+# Clone specific version or main branch
+if [ "$INSTALL_VERSION" = "main" ]; then
+    git clone "$GITHUB_REPO" "$INSTALL_DIR"
+else
+    # Validate version exists by checking if tag/branch exists
+    echo_info "Validating version $INSTALL_VERSION..."
+    if ! git ls-remote --tags "$GITHUB_REPO" | grep -q "refs/tags/$INSTALL_VERSION"; then
+        echo_error "Version $INSTALL_VERSION not found in repository. Please check available releases at $GITHUB_REPO/releases"
+    fi
+    
+    git clone --branch "$INSTALL_VERSION" --depth 1 "$GITHUB_REPO" "$INSTALL_DIR"
+fi
+
 if [ $? -ne 0 ]; then
     echo_error "Failed to clone the repository. Please check your internet connection and permissions."
 fi
@@ -111,6 +148,7 @@ echo_info "✓ docker-compose command wrapper created."
 # 8. Final Success Message
 echo_info "-------------------------------------------------"
 echo_info "  Installation successful!"
+echo_info "  Version: $INSTALL_VERSION"
 echo_info "  You can now run the tool by typing: docker"
 echo_info "  And manage services with: docker-compose"
 echo_info "  Example: docker run alpine:latest echo 'Hello'"

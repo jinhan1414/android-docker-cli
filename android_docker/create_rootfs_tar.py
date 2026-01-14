@@ -773,6 +773,14 @@ class DockerImageToRootFS:
             self._extract_layer(layer_path, rootfs_dir, is_first_layer)
 
         logger.info(f"根文件系统已提取到: {rootfs_dir}")
+        
+        # 验证关键文件是否存在
+        missing_files = self._validate_critical_files(rootfs_dir)
+        if missing_files:
+            error_msg = f"提取后缺少关键文件: {', '.join(missing_files)}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
+        
         return rootfs_dir
 
     def _extract_layer(self, layer_path, rootfs_dir, is_first_layer=False):
@@ -825,9 +833,19 @@ class DockerImageToRootFS:
                     self._safe_extract_tar(tar, rootfs_dir)
 
     def _safe_extract_tar(self, tar, rootfs_dir):
-        """安全地提取tar文件，处理特殊情况"""
+        """安全地提取tar文件，处理特殊情况（增强Android支持）"""
+        whiteout_count = 0
+        
         # 设置提取过滤器以避免警告
         def extract_filter(member, path):
+            nonlocal whiteout_count
+            
+            # 跳过whiteout文件
+            if member.name.startswith('.wh.') or '/.wh.' in member.name:
+                logger.debug(f"跳过whiteout文件: {member.name}")
+                whiteout_count += 1
+                return None
+
             # 跳过设备文件和特殊文件
             if member.isdev() or member.isfifo():
                 logger.debug(f"跳过设备/FIFO文件: {member.name}")
@@ -881,6 +899,13 @@ class DockerImageToRootFS:
                     self._handle_hardlink(tar, member, rootfs_dir)
                 elif member.issym():
                     self._manual_create_symlink(member, rootfs_dir)
+        
+        # 如果跳过了whiteout文件，记录警告
+        if whiteout_count > 0:
+            if self._is_android_environment():
+                logger.warning(f"在Android环境中跳过了 {whiteout_count} 个whiteout文件。层删除语义可能不完全保留。")
+            else:
+                logger.info(f"跳过了 {whiteout_count} 个whiteout文件")
 
     def _handle_hardlink(self, tar, member, rootfs_dir):
         """处理硬链接，转换为普通文件"""
@@ -946,45 +971,84 @@ class DockerImageToRootFS:
             logger.debug(f"手动创建符号链接失败 {member.name}: {e}")
 
     def _is_android_environment(self):
-        """检测是否在Android环境中运行"""
+        """检测是否在Android环境中运行（增强版）"""
         android_indicators = [
             '/data/data/com.termux' in os.getcwd(),
             os.path.exists('/system/build.prop'),
             os.environ.get('ANDROID_DATA') is not None,
-            os.environ.get('TERMUX_VERSION') is not None
+            os.environ.get('TERMUX_VERSION') is not None,
+            os.path.exists('/data/data/com.termux'),
+            'com.termux' in os.environ.get('PREFIX', ''),
         ]
 
-        return any(android_indicators)
+        is_android = any(android_indicators)
+
+        if is_android:
+            logger.debug("检测到Android/Termux环境")
+
+        return is_android
+
+    def _validate_critical_files(self, rootfs_dir):
+        """验证关键文件是否存在"""
+        missing_files = []
+        
+        # 检查shell
+        shells = ['/bin/sh', '/bin/bash', '/bin/ash']
+        has_shell = False
+        for shell in shells:
+            shell_path = os.path.join(rootfs_dir, shell.lstrip('/'))
+            if os.path.exists(shell_path):
+                has_shell = True
+                break
+        
+        if not has_shell:
+            missing_files.append('shell (checked: /bin/sh, /bin/bash, /bin/ash)')
+        
+        # 检查lib目录
+        lib_dirs = ['/lib', '/lib64', '/usr/lib']
+        has_lib = False
+        for lib_dir in lib_dirs:
+            lib_path = os.path.join(rootfs_dir, lib_dir.lstrip('/'))
+            if os.path.exists(lib_path) and os.path.isdir(lib_path) and os.listdir(lib_path):
+                has_lib = True
+                break
+        
+        if not has_lib:
+            missing_files.append('library directory (checked: /lib, /lib64, /usr/lib)')
+        
+        # 检查/usr/bin
+        usr_bin_path = os.path.join(rootfs_dir, 'usr/bin')
+        if not os.path.exists(usr_bin_path) or not os.path.isdir(usr_bin_path) or not os.listdir(usr_bin_path):
+            missing_files.append('/usr/bin directory')
+        
+        return missing_files
 
     def _extract_layer_with_tar(self, layer_path, rootfs_dir, is_first_layer=False):
-        """使用tar命令提取层（备用方案）"""
+        """使用tar命令提取层（增强Android支持）"""
         # 检测文件类型并使用适当的tar选项
         with open(layer_path, 'rb') as f:
             magic = f.read(2)
 
         # 构建基础命令
         if magic == b'\x1f\x8b':  # gzip
-            base_cmd = ['proot','-0','-l','tar', '-xzf', layer_path, '-C', rootfs_dir]
+            base_cmd = ['tar', '-xzf', layer_path, '-C', rootfs_dir]
         else:
-            base_cmd = ['proot','-0','-l','tar', '-xf', layer_path, '-C', rootfs_dir]
+            base_cmd = ['tar', '-xf', layer_path, '-C', rootfs_dir]
 
         # 根据是否为第一层和环境选择不同的选项
         if self._is_android_environment():
-            if is_first_layer:
-                # 第一层：创建基础文件系统
-                tar_options = [
-                    '--no-same-owner',
-                    '--no-same-permissions',
-                    '--dereference'  # 将硬链接转换为普通文件
-                ]
-            else:
-                # 后续层：更宽松的选项，允许覆盖和忽略错误
-                tar_options = [
-                    '--no-same-owner',
-                    '--no-same-permissions',
-                    '--dereference',
-                    '--overwrite',
-                ]
+            # Android环境使用增强的宽松选项
+            tar_options = [
+                '--no-same-owner',           # 忽略所有者信息
+                '--no-same-permissions',     # 忽略权限信息
+                '--warning=no-unknown-keyword',  # 忽略未知关键字警告
+                '--exclude=.wh.*',           # 跳过whiteout文件
+                '--exclude=.wh.wh.*',        # 跳过whiteout opaque标记
+            ]
+            
+            if not is_first_layer:
+                # 后续层允许覆盖
+                tar_options.append('--overwrite')
         else:
             # 标准Linux环境选项
             tar_options = [
@@ -999,32 +1063,35 @@ class DockerImageToRootFS:
             logger.debug("tar提取成功")
         except subprocess.CalledProcessError as e:
             logger.warning(f"tar命令失败，尝试宽松模式: {e}")
+            # 调用fallback方法
+            self._extract_with_fallback(base_cmd, rootfs_dir)
 
-            # 使用最宽松的选项，允许错误但继续
-            fallback_cmd = base_cmd + [
-                '--dereference',
-                '--no-same-owner',
-                '--no-same-permissions',
-                '--skip-old-files'  # 跳过已存在的文件
-            ]
+    def _extract_with_fallback(self, base_cmd, rootfs_dir):
+        """使用最宽松的选项重试tar提取"""
+        fallback_cmd = base_cmd + [
+            '--no-same-owner',
+            '--no-same-permissions',
+            '--warning=no-unknown-keyword',
+            '--exclude=.wh.*',
+            '--exclude=.wh.wh.*',
+            '--skip-old-files',          # 跳过已存在的文件
+            '--ignore-failed-read',      # 忽略读取失败
+        ]
 
-            # 直接使用subprocess.run，允许非零退出码
-            result = subprocess.run(fallback_cmd, capture_output=True, text=True)
+        result = subprocess.run(fallback_cmd, capture_output=True, text=True)
 
-            if result.returncode == 0:
-                logger.info("使用宽松模式提取成功")
-            elif result.returncode == 2:
-                # tar退出码2通常表示有警告但部分成功
-                logger.info("tar提取完成（有警告，但大部分文件已提取）")
-                if result.stderr:
-                    # 只显示前几行错误，避免日志过长
-                    error_lines = result.stderr.strip().split('\n')[:5]
-                    logger.debug(f"tar警告（仅显示前5行）: {error_lines}")
-            else:
-                logger.error(f"tar提取失败，退出码: {result.returncode}")
-                if result.stderr:
-                    logger.error(f"错误信息: {result.stderr[:500]}...")  # 限制错误信息长度
-                raise subprocess.CalledProcessError(result.returncode, fallback_cmd, result.stderr)
+        if result.returncode == 0:
+            logger.info("使用宽松模式提取成功")
+        elif result.returncode == 2:
+            # tar退出码2表示有警告但部分成功
+            logger.info("tar提取完成（有警告，但大部分文件已提取）")
+            logger.debug(f"tar警告: {result.stderr[:200]}...")
+        else:
+            error_msg = f"tar提取失败，退出码: {result.returncode}"
+            if self._is_android_environment():
+                error_msg += "\n提示：在Android环境中，某些权限操作可能失败。尝试使用 --verbose 查看详细信息。"
+            logger.error(error_msg)
+            raise subprocess.CalledProcessError(result.returncode, fallback_cmd, result.stderr)
 
 
     
