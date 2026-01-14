@@ -708,6 +708,28 @@ class DockerCLI:
         """列出镜像"""
         logger.info("列出缓存的镜像:")
         self.runner.list_cache()
+    
+    def load(self, tar_path):
+        """从tar归档文件加载镜像"""
+        from .image_loader import LocalImageLoader
+        
+        logger.info(f"从tar文件加载镜像: {tar_path}")
+        
+        # 创建加载器
+        loader = LocalImageLoader(self.cache_dir)
+        
+        # 加载镜像
+        success, image_name, error_msg = loader.load_image(tar_path)
+        
+        if success:
+            logger.info(f"✓ 成功加载镜像: {image_name}")
+            # 显示更新后的镜像列表
+            logger.info("\n当前镜像列表:")
+            self.images()
+            return True
+        else:
+            logger.error(f"✗ 加载镜像失败: {error_msg}")
+            return False
         
     def rmi(self, image_url):
         """删除镜像"""
@@ -865,6 +887,9 @@ def create_parser():
   %(prog)s pull alpine:latest
   %(prog)s pull nginx:alpine
 
+  # 从本地tar文件加载镜像
+  %(prog)s load -i alpine.tar
+
   # 运行容器
   %(prog)s run alpine:latest
   %(prog)s run -d nginx:alpine
@@ -973,6 +998,10 @@ def create_parser():
     exec_parser.add_argument('command', nargs='*', help='要执行的命令')
     exec_parser.add_argument('-it', '--interactive-tty', action='store_true', help='交互式运行容器 (分配伪TTY并保持stdin打开)')
 
+    # load 命令
+    load_parser = subparsers.add_parser('load', help='从tar归档文件加载镜像')
+    load_parser.add_argument('-i', '--input', required=True, help='输入tar文件路径')
+
     return parser
 
 def main():
@@ -1074,6 +1103,10 @@ def main():
             
         elif args.subcommand == 'exec':
             success = cli.exec(args.container, args.command, interactive=args.interactive_tty)
+            sys.exit(0 if success else 1)
+
+        elif args.subcommand == 'load':
+            success = cli.load(args.input)
             sys.exit(0 if success else 1)
 
         else:

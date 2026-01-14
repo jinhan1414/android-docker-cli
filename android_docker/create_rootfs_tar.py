@@ -147,8 +147,22 @@ class DockerRegistryClient:
         url = f"{self.registry_url}/v2/{path}"
         cmd = ['curl', '-v', '-i', '--insecure', '-H', f'User-Agent: {self.user_agent}']
 
+        # Always include comprehensive Accept headers for manifest requests
+        # This ensures compatibility with both OCI and Docker v2 registries
+        if 'manifests' in path:
+            comprehensive_accept = ', '.join([
+                'application/vnd.oci.image.manifest.v1+json',
+                'application/vnd.oci.image.index.v1+json',
+                'application/vnd.docker.distribution.manifest.v2+json',
+                'application/vnd.docker.distribution.manifest.list.v2+json'
+            ])
+            cmd.extend(['-H', f'Accept: {comprehensive_accept}'])
+
         if headers:
             for key, value in headers.items():
+                # Skip Accept header if we already added comprehensive one
+                if key.lower() == 'accept' and 'manifests' in path:
+                    continue
                 cmd.extend(['-H', f'{key}: {value}'])
 
         if self.auth_token:
@@ -270,16 +284,26 @@ class DockerImageToRootFS:
         logger.info(f"目标架构: {self.architecture}")
         
     def _get_current_architecture(self):
-        """获取当前系统的架构"""
+        """获取当前系统的架构，并标准化为Docker/OCI格式"""
         machine = platform.machine().lower()
-        if machine in ['x86_64', 'amd64']:
-            return 'amd64'
-        elif machine in ['aarch64', 'arm64']:
-            return 'arm64'
-        elif machine.startswith('armv'):
-            return 'arm'
-        elif machine in ['i386', 'i686']:
-            return '386'
+        
+        # 架构映射字典
+        arch_map = {
+            'x86_64': 'amd64',
+            'amd64': 'amd64',
+            'aarch64': 'arm64',  # 关键标准化：aarch64 → arm64
+            'arm64': 'arm64',
+            'armv7l': 'arm',
+            'armv6l': 'arm',
+            'i386': '386',
+            'i686': '386',
+        }
+        
+        normalized = arch_map.get(machine)
+        if normalized:
+            if machine == 'aarch64':
+                logger.info(f"架构标准化: {machine} → {normalized}")
+            return normalized
         else:
             logger.warning(f"无法识别的架构: {machine}, 将默认使用 amd64")
             return 'amd64'
@@ -415,7 +439,14 @@ class DockerImageToRootFS:
             selected_manifest_descriptor = None
             for manifest_descriptor in manifest.get('manifests', []):
                 platform_info = manifest_descriptor.get('platform', {})
-                if platform_info.get('architecture') == self.architecture:
+                manifest_arch = platform_info.get('architecture')
+                
+                # 架构等效性检查：aarch64 和 arm64 视为等效
+                arch_match = (manifest_arch == self.architecture or 
+                             (self.architecture == 'arm64' and manifest_arch == 'aarch64') or
+                             (self.architecture == 'aarch64' and manifest_arch == 'arm64'))
+                
+                if arch_match:
                     # 优先选择与OS匹配的，如果没有os字段则直接匹配
                     if platform_info.get('os') == 'linux' or 'os' not in platform_info:
                         selected_manifest_descriptor = manifest_descriptor
@@ -435,7 +466,7 @@ class DockerImageToRootFS:
                 logger.info(f"已选择子manifest，类型: {content_type}")
             else:
                 available_archs = [m.get('platform', {}).get('architecture') for m in manifest.get('manifests', [])]
-                raise ValueError(f"在manifest list中找不到适用于架构 '{self.architecture}' 的镜像。可用架构: {available_archs}")
+                raise ValueError(f"在manifest list中找不到适用于架构 '{self.architecture}' 的镜像。可用架构: {', '.join(filter(None, available_archs))}")
 
         # 创建OCI目录结构
         blobs_dir = os.path.join(oci_dir, 'blobs', 'sha256')

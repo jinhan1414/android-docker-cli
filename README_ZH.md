@@ -91,11 +91,55 @@ docker exec -it <container_id> /bin/sh
 # 列出缓存的镜像
 docker images
 
+# 从本地tar文件加载镜像
+docker load -i alpine.tar
+docker load -i /path/to/my-image.tar
+
 # 删除一个缓存的镜像
 docker rmi alpine:latest
 
 # 登录到镜像仓库
 docker login your-private-registry.com
+```
+
+## 加载本地镜像
+
+您可以从本地tar归档文件加载Docker镜像，而无需从镜像仓库拉取。这在以下情况下很有用：
+- 使用预先下载的镜像
+- 加载在其他系统上构建的镜像
+- 离线工作
+
+### 要求
+
+tar文件必须是有效的Docker镜像归档文件，包含：
+- `manifest.json` - 镜像清单
+- 层tar文件（例如 `<hash>/layer.tar`）
+- 配置JSON文件（例如 `<hash>.json`）
+
+### 使用方法
+
+```bash
+# 从tar文件加载镜像
+docker load -i alpine.tar
+
+# 从指定路径加载镜像
+docker load -i /sdcard/Download/my-image.tar
+
+# 加载后，镜像将出现在您的镜像列表中
+docker images
+```
+
+### 创建Docker镜像Tar文件
+
+您可以使用标准Docker创建兼容的tar文件：
+
+```bash
+# 在安装了Docker的系统上
+docker save alpine:latest -o alpine.tar
+
+# 将tar文件传输到您的Android设备
+# 然后加载它
+docker load -i alpine.tar
 ```
 
 ## Docker Compose 支持
@@ -130,6 +174,8 @@ services:
 
 - ✅ **完整的容器生命周期**: `run`, `ps`, `stop`, `start`, `restart`, `logs`, `rm`, `attach`, `exec`。
 - ✅ **镜像仓库认证**: 使用 `login` 命令登录私有或公共镜像仓库。
+- ✅ **本地镜像加载**: 使用 `docker load` 从本地tar文件加载Docker镜像。
+- ✅ **OCI镜像仓库支持**: 从符合OCI标准的镜像仓库（如GitHub Container Registry (ghcr.io)）拉取镜像。
 - ✅ **Docker Compose 支持**: 使用 `docker-compose up` 和 `down` 管理多容器配置。
 - ✅ **Docker风格CLI**: 熟悉且直观的命令行界面。
 - ✅ **持久化存储**: 容器在重启后能保持其状态和文件系统，存储于 `~/.docker_proot_cache/`。

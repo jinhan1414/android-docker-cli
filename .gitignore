@@ -2,3 +2,6 @@
 /.vscode/
 **/__pycache__/
 /.claude/
+/.hypothesis/
+/.kiro/
+/.pytest_cache/

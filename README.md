@@ -91,11 +91,55 @@ docker exec -it <container_id> /bin/sh
 # List cached images
 docker images
 
+# Load an image from a local tar file
+docker load -i alpine.tar
+docker load -i /path/to/my-image.tar
+
 # Remove a cached image
 docker rmi alpine:latest
 
 # Log in to a registry
 docker login your-private-registry.com
+```
+
+## Loading Local Images
+
+You can load Docker images from local tar archives without needing to pull them from a registry. This is useful for:
+- Using pre-downloaded images
+- Loading images built on other systems
+- Working offline
+
+### Requirements
+
+The tar file must be a valid Docker image archive containing:
+- `manifest.json` - Image manifest
+- Layer tar files (e.g., `<hash>/layer.tar`)
+- Config JSON file (e.g., `<hash>.json`)
+
+### Usage
+
+```bash
+# Load an image from a tar file
+docker load -i alpine.tar
+
+# Load an image from a specific path
+docker load -i /sdcard/Download/my-image.tar
+
+# After loading, the image will appear in your image list
+docker images
+```
+
+### Creating Docker Image Tar Files
+
+You can create compatible tar files using standard Docker:
+
+```bash
+# On a system with Docker installed
+docker save alpine:latest -o alpine.tar
+
+# Transfer the tar file to your Android device
+# Then load it
+docker load -i alpine.tar
 ```
 
 ## Docker Compose Support
@@ -130,6 +174,8 @@ services:
 
 - ✅ **Full Container Lifecycle**: `run`, `ps`, `stop`, `start`, `restart`, `logs`, `rm`, `attach`, `exec`.
 - ✅ **Registry Authentication**: `login` to private or public registries.
+- ✅ **Local Image Loading**: Load Docker images from local tar files with `docker load`.
+- ✅ **OCI Registry Support**: Pull images from OCI-compliant registries like GitHub Container Registry (ghcr.io).
 - ✅ **Docker Compose Support**: Manage multi-container setups with `docker-compose up` and `down`.
 - ✅ **Docker-Style CLI**: A familiar and intuitive command-line interface.
 - ✅ **Persistent Storage**: Containers maintain their state and filesystem across restarts, stored in `~/.docker_proot_cache/`.
