@@ -87,8 +87,9 @@ class TestWritableDirectories(unittest.TestCase):
             self.assertIsInstance(bind_mounts, list)
             self.assertGreater(len(bind_mounts), 0)
             
-            # 验证writable_dirs目录被创建
-            writable_storage = os.path.join(container_dir, 'writable_dirs')
+            # 验证writable_dirs目录被创建（在父目录中）
+            parent_dir = os.path.dirname(container_dir)
+            writable_storage = os.path.join(parent_dir, 'writable_dirs')
             self.assertTrue(os.path.exists(writable_storage), 
                           f"writable_storage目录应该存在: {writable_storage}")
             

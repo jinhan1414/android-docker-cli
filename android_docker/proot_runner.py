@@ -390,10 +390,9 @@ class ProotRunner:
             ])
 
             # 添加可写系统目录绑定
-            if hasattr(args, 'rootfs_dir') and args.rootfs_dir:
-                # 使用rootfs_dir的父目录作为container_dir
-                container_dir = os.path.dirname(args.rootfs_dir)
-                writable_binds = self._prepare_writable_directories(container_dir)
+            # 使用rootfs_dir作为container_dir来存储可写目录
+            if self.rootfs_dir:
+                writable_binds = self._prepare_writable_directories(self.rootfs_dir)
                 default_binds.extend(writable_binds)
                 logger.info("已启用Android可写目录支持")
 
@@ -516,7 +515,7 @@ class ProotRunner:
         
         return is_android
 
-    def _prepare_writable_directories(self, container_dir):
+    def _prepare_writable_directories(self, rootfs_dir):
         """为Android环境准备可写的系统目录"""
         if not self._is_android_environment():
             return []
@@ -530,8 +529,11 @@ class ProotRunner:
             'run',
         ]
 
-        # 在容器持久化目录中创建可写目录
-        writable_storage = os.path.join(container_dir, 'writable_dirs')
+        # 在rootfs目录的同级创建writable_dirs目录
+        # 如果rootfs_dir是临时目录，writable_dirs也会在临时目录中
+        # 如果rootfs_dir是持久化目录，writable_dirs也会持久化
+        parent_dir = os.path.dirname(rootfs_dir) if os.path.dirname(rootfs_dir) else rootfs_dir
+        writable_storage = os.path.join(parent_dir, 'writable_dirs')
         os.makedirs(writable_storage, exist_ok=True)
 
         bind_mounts = []
