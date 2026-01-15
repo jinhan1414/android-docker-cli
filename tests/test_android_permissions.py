@@ -4,10 +4,13 @@ Android权限修复的属性测试和单元测试
 使用hypothesis库进行基于属性的测试
 """
 
+import io
 import os
 import sys
 import tempfile
 import shutil
+import stat
+import tarfile
 import unittest
 from hypothesis import given, strategies as st, settings
 from pathlib import Path
@@ -214,6 +217,54 @@ class TestExtractionResilience(unittest.TestCase):
         for code in acceptable_codes:
             self.assertIn(code, [0, 2], 
                          f"退出码 {code} 应该被接受")
+
+
+class TestAndroidExtractionPermissions(unittest.TestCase):
+    """测试Android提取权限保留"""
+
+    def setUp(self):
+        """设置测试环境"""
+        self.test_dir = tempfile.mkdtemp(prefix='test_exec_')
+        self.image_processor = DockerImageToRootFS(
+            'test:latest',
+            output_path=os.path.join(self.test_dir, 'test.tar')
+        )
+        self.image_processor.temp_dir = self.test_dir
+
+    def tearDown(self):
+        """清理测试环境"""
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def test_android_executable_bit_preserved(self):
+        """Android环境下应保留可执行文件的执行位"""
+        if os.name == 'nt':
+            self.skipTest("Windows不支持POSIX执行位语义")
+
+        rootfs = os.path.join(self.test_dir, 'rootfs')
+        os.makedirs(rootfs, exist_ok=True)
+
+        tar_path = os.path.join(self.test_dir, 'layer.tar')
+        data = b'#!/bin/sh\necho hello\n'
+
+        with tarfile.open(tar_path, 'w') as tar:
+            info = tarfile.TarInfo(name='bin/busybox')
+            info.mode = 0o755
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+        original_method = self.image_processor._is_android_environment
+        self.image_processor._is_android_environment = lambda: True
+        try:
+            with tarfile.open(tar_path, 'r') as tar:
+                self.image_processor._safe_extract_tar(tar, rootfs)
+        finally:
+            self.image_processor._is_android_environment = original_method
+
+        extracted_path = os.path.join(rootfs, 'bin', 'busybox')
+        self.assertTrue(os.path.exists(extracted_path), "busybox应该被提取")
+        mode = os.stat(extracted_path).st_mode
+        self.assertTrue(mode & stat.S_IXUSR, "busybox应该是可执行文件")
 
 
 class TestContainerCleanup(unittest.TestCase):

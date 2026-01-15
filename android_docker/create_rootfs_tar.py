@@ -863,10 +863,11 @@ class DockerImageToRootFS:
                 logger.warning(f"跳过不安全的路径: {member.name}")
                 return None
 
-            # 在Android环境中，重置权限以避免问题
+            # 在Android环境中，重置权限以避免问题，并保留可执行位
             if self._is_android_environment():
                 if member.isfile():
-                    member.mode = 0o644
+                    has_exec = bool(member.mode & 0o111)
+                    member.mode = 0o755 if has_exec else 0o644
                 elif member.isdir():
                     member.mode = 0o755
                 # 重置所有者信息
