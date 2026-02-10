@@ -90,6 +90,16 @@
     2.  `~/.docker_proot_cache/` 目录下对应的 `.tar.gz` 和 `.info` 文件被删除。
     3.  执行 `docker images` 不再显示该镜像。
 
+### 3.8. 用例 8: 镜像启动兼容性 (需要 root 启动再降权的镜像)
+
+*   **目的**: 覆盖“入口脚本会 `chown` 卷挂载路径并由 supervisor/s6 等进程降权运行”的镜像启动路径。
+*   **步骤**:
+    1.  执行命令: `docker run --name hass-panel -v ./data2:/config/hass-panel registry.cn-hangzhou.aliyuncs.com/hass-panel/hass-panel:latest`
+    2.  如果容器以后台方式运行，执行 `docker logs hass-panel` 观察启动日志。
+*   **预期结果**:
+    1.  不再出现 `Can't drop privilege as nonroot user` 导致的启动失败。
+    2.  若存在 `chown` 行为，不应因“非 root”而直接失败（仍可能因镜像自身原因失败，需结合日志判断）。
+
 ## 4. 风险与缓解
 
 *   **风险**: 网络问题导致镜像拉取失败。

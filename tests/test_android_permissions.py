@@ -180,6 +180,73 @@ class TestAndroidHostsBind(unittest.TestCase):
             self.runner._is_android_environment = original_method
 
 
+class TestAndroidFakeRootMode(unittest.TestCase):
+    """Test Android default fake-root behavior and escape hatch."""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix='test_fakeroot_')
+        self.runner = ProotRunner(cache_dir=self.test_dir)
+        self.rootfs_dir = os.path.join(self.test_dir, 'rootfs')
+        os.makedirs(os.path.join(self.rootfs_dir, 'bin'), exist_ok=True)
+        Path(os.path.join(self.rootfs_dir, 'bin', 'sh')).touch()
+        self.runner.rootfs_dir = self.rootfs_dir
+
+        self._orig_android = self.runner._is_android_environment
+        self.runner._is_android_environment = lambda: True
+
+        self._orig_env = os.environ.get(self.runner.FAKE_ROOT_ENV)
+
+        class Args:
+            detach = False
+            bind = []
+            workdir = None
+            env = []
+            command = []
+            fake_root = None
+
+        self.Args = Args
+
+    def tearDown(self):
+        self.runner._is_android_environment = self._orig_android
+
+        if self._orig_env is None:
+            os.environ.pop(self.runner.FAKE_ROOT_ENV, None)
+        else:
+            os.environ[self.runner.FAKE_ROOT_ENV] = self._orig_env
+
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def test_android_defaults_to_fake_root(self):
+        os.environ.pop(self.runner.FAKE_ROOT_ENV, None)
+        cmd = self.runner._build_proot_command(self.Args())
+        self.assertIn('-0', cmd, "Android default should include proot fake-root flag (-0)")
+
+    def test_escape_hatch_disables_fake_root(self):
+        os.environ[self.runner.FAKE_ROOT_ENV] = '0'
+        cmd = self.runner._build_proot_command(self.Args())
+        self.assertNotIn('-0', cmd, "Escape hatch should disable fake-root when set to 0")
+
+    def test_explicit_setting_overrides_env(self):
+        os.environ[self.runner.FAKE_ROOT_ENV] = '0'
+        args = self.Args()
+        args.fake_root = True
+        cmd = self.runner._build_proot_command(args)
+        self.assertIn('-0', cmd, "Explicit args.fake_root=True should override env disable")
+
+        os.environ[self.runner.FAKE_ROOT_ENV] = '1'
+        args = self.Args()
+        args.fake_root = False
+        cmd = self.runner._build_proot_command(args)
+        self.assertNotIn('-0', cmd, "Explicit args.fake_root=False should override env enable")
+
+    def test_non_android_never_enables_fake_root(self):
+        os.environ[self.runner.FAKE_ROOT_ENV] = '1'
+        self.runner._is_android_environment = lambda: False
+        cmd = self.runner._build_proot_command(self.Args())
+        self.assertNotIn('-0', cmd, "Non-Android runs should not use fake-root by default")
+
+
 class TestCriticalFileValidation(unittest.TestCase):
     """测试关键文件验证"""
     

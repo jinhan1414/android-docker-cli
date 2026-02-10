@@ -25,6 +25,8 @@ logger = logging.getLogger(__name__)
 class ProotRunner:
     """使用proot运行容器的类，支持一条龙服务"""
 
+    FAKE_ROOT_ENV = "ANDROID_DOCKER_FAKE_ROOT"
+
     def __init__(self, cache_dir=None):
         self.temp_dir = None
         self.rootfs_dir = None
@@ -374,6 +376,11 @@ class ProotRunner:
         """构建proot命令（增强Android支持）"""
         cmd = ['proot']
 
+        # Android/Termux compatibility: default to proot fake-root semantics so images that
+        # assume "start as root then drop privileges" behave closer to Docker defaults.
+        if self._resolve_fake_root(args):
+            cmd.append('-0')
+
         # 基本选项
         cmd.extend(['-r', self.rootfs_dir])
 
@@ -463,6 +470,45 @@ class ProotRunner:
             cmd.extend(final_command)
 
         return cmd
+
+    @staticmethod
+    def _parse_env_bool(value):
+        """Parse common boolean env var strings.
+
+        Returns:
+            True/False, or None if value is empty/unknown.
+        """
+        if value is None:
+            return None
+        text = str(value).strip().lower()
+        if text == "":
+            return None
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return None
+
+    def _resolve_fake_root(self, args=None):
+        """Return whether to enable proot fake-root for this run.
+
+        Precedence:
+        - If args.fake_root is explicitly set (True/False), use it (for persisted detached containers).
+        - Otherwise, only consider fake-root on Android/Termux:
+          - Default enabled.
+          - Can be disabled via ANDROID_DOCKER_FAKE_ROOT=0 (escape hatch).
+        """
+        if args is not None and hasattr(args, "fake_root") and args.fake_root is not None:
+            return bool(args.fake_root)
+
+        if not self._is_android_environment():
+            return False
+
+        env_value = os.environ.get(self.FAKE_ROOT_ENV)
+        parsed = self._parse_env_bool(env_value)
+        if parsed is None:
+            return True
+        return parsed
 
     def _create_startup_script(self, env_vars, command):
         """创建启动脚本来设置环境变量和执行命令"""

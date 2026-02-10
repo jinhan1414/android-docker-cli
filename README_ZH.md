@@ -234,6 +234,9 @@ tar: ./var/lib/apt/lists/.wh.auxfiles: Cannot open: Permission denied
 - 某些镜像可能需要proot中不可用的特定功能
 - 尝试使用 `--verbose` 运行以获取详细调试信息
 
+如果在 Android/Termux 下看到类似 `chown ... Operation not permitted` 或 `Can't drop privilege as nonroot user` 的错误：
+- 请更新到较新的版本。Android 运行会启用额外的兼容行为，使一些“启动时需要 root、随后再降权”的镜像无需额外参数即可运行。
+
 ## 限制说明
 
 - 基于 `proot`，并非完整的容器化（无内核级的进程或网络隔离）。

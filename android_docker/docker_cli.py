@@ -207,11 +207,21 @@ class DockerCLI:
                 self.username = kwargs.get('username')
                 self.password = kwargs.get('password')
                 self.command = command
+                # Internal: used to persist/reuse the effective Android fake-root setting for detached containers.
+                self.fake_root = kwargs.get('fake_root', None)
                 if self.command and self.command[0] == '--':
                     self.command = self.command[1:]
                 
         args = Args()
-        
+
+        # Compute the effective setting once and persist it for detached containers so start/restart
+        # is stable even if process environment changes later.
+        try:
+            effective_fake_root = self.runner._resolve_fake_root(args)
+        except Exception:
+            effective_fake_root = None
+        args.fake_root = effective_fake_root
+
         # 记录容器信息
         containers = self._load_containers()
         container_info = {
@@ -229,6 +239,7 @@ class DockerCLI:
                 'env': args.env,
                 'bind': args.bind,
                 'workdir': args.workdir,
+                'fake_root': args.fake_root,
             }
         }
         
@@ -326,6 +337,10 @@ class DockerCLI:
 
         try:
             logger.debug(f"Executing detached command: {' '.join(cmd)}")
+            # Ensure detached containers reuse the effective fake-root setting.
+            child_env = os.environ.copy()
+            if hasattr(args, 'fake_root') and args.fake_root is not None:
+                child_env[self.runner.FAKE_ROOT_ENV] = '1' if args.fake_root else '0'
             # 打开日志文件用于重定向输出
             with open(log_file, 'a') as lf:
                 lf.write(f"--- Starting container at {datetime.now()} ---\\n")
@@ -334,7 +349,8 @@ class DockerCLI:
                     stdout=lf,
                     stderr=lf,
                     stdin=subprocess.DEVNULL,
-                    start_new_session=True
+                    start_new_session=True,
+                    env=child_env,
                 )
             
             # 等待pid文件被创建，最多等待5秒
@@ -447,6 +463,7 @@ class DockerCLI:
                 self.detach = is_detached
                 self.interactive = run_args.get('interactive', False)
                 self.force_download = False
+                self.fake_root = run_args.get('fake_root', None)
 
         args = Args()
 

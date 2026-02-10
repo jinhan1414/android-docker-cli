@@ -234,6 +234,9 @@ If containers fail to start:
 - Some images may require specific capabilities not available in proot
 - Try running with `--verbose` for detailed debugging information
 
+If you see errors like `chown ... Operation not permitted` or `Can't drop privilege as nonroot user` on Android/Termux:
+- Update to a recent version. Android runs include additional compatibility behavior so images that expect to start as root and then drop privileges can run without extra flags.
+
 ## Limitations
 
 - Based on `proot`, not full containerization (no kernel-level process or network isolation).
