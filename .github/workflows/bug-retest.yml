@@ -195,18 +195,27 @@ jobs:
             COMPOSE_FILE="$WORK_DIR/docker-compose.yml"
             LOG_FILE="$WORK_DIR/repro.log"
             mkdir -p "$WORK_DIR/data" "$CACHE_DIR"
+            export IMAGE COMPOSE_FILE
+            python - <<'PY'
+            import os
+            import textwrap
+            from pathlib import Path
 
-            cat > "$COMPOSE_FILE" <<YAML
-            version: '3'
-            services:
-              hass-panel:
-                container_name: hass-panel
-                image: ${IMAGE}
-                restart: unless-stopped
-                network_mode: host
-                volumes:
-                  - ./data:/config/hass-panel
-            YAML
+            compose = textwrap.dedent(
+                f"""\
+                version: '3'
+                services:
+                  hass-panel:
+                    container_name: hass-panel
+                    image: {os.environ['IMAGE']}
+                    restart: unless-stopped
+                    network_mode: host
+                    volumes:
+                      - ./data:/config/hass-panel
+                """
+            )
+            Path(os.environ["COMPOSE_FILE"]).write_text(compose, encoding="utf-8")
+            PY
 
             export ANDROID_DATA=/data
             export TERMUX_VERSION=ci-simulated
