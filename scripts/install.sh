@@ -49,6 +49,14 @@ echo_error() {
 echo_info "Starting installation of android-docker-cli..."
 echo_info "Installing version: $INSTALL_VERSION"
 
+# Resolve wrapper shell path.
+# Prefer Termux's shell when available; otherwise fall back to portable /usr/bin/env sh.
+if [ -n "${PREFIX:-}" ] && [ -x "$PREFIX/bin/sh" ]; then
+    WRAPPER_SHEBANG="#!$PREFIX/bin/sh"
+else
+    WRAPPER_SHEBANG="#!/usr/bin/env sh"
+fi
+
 # 2. Check Dependencies
 echo_info "Checking dependencies..."
 for cmd in git python; do
@@ -65,17 +73,19 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 echo_info "Cloning repository into $INSTALL_DIR..."
 
-# Clone specific version or main branch
+# Clone specific version or main branch/commit.
 if [ "$INSTALL_VERSION" = "main" ]; then
     git clone "$GITHUB_REPO" "$INSTALL_DIR"
 else
-    # Validate version exists by checking if tag/branch exists
-    echo_info "Validating version $INSTALL_VERSION..."
-    if ! git ls-remote --tags "$GITHUB_REPO" | grep -q "refs/tags/$INSTALL_VERSION"; then
-        echo_error "Version $INSTALL_VERSION not found in repository. Please check available releases at $GITHUB_REPO/releases"
+    # Try fast branch/tag clone first.
+    if ! git clone --branch "$INSTALL_VERSION" --depth 1 "$GITHUB_REPO" "$INSTALL_DIR"; then
+        echo_info "Ref '$INSTALL_VERSION' is not a branch/tag. Trying commit-ish checkout..."
+        git clone "$GITHUB_REPO" "$INSTALL_DIR" || echo_error "Failed to clone repository for commit checkout."
+        (
+            cd "$INSTALL_DIR" &&
+            git checkout "$INSTALL_VERSION"
+        ) || echo_error "Ref '$INSTALL_VERSION' not found. Check the target branch/tag/SHA."
     fi
-    
-    git clone --branch "$INSTALL_VERSION" --depth 1 "$GITHUB_REPO" "$INSTALL_DIR"
 fi
 
 if [ $? -ne 0 ]; then
@@ -97,7 +107,7 @@ echo_info "✓ Python dependencies installed."
 # 5. Create the Wrapper Script
 echo_info "Creating command wrapper at $CMD_PATH..."
 cat > "$CMD_PATH" << EOF
-#!/data/data/com.termux/files/usr/bin/sh
+$WRAPPER_SHEBANG
 
 # Wrapper script for docker_cli.py
 # This allows running the tool with the 'docker' command.
@@ -132,7 +142,7 @@ echo_info "✓ Command wrapper created and made executable."
 # 7. Create docker-compose Wrapper
 echo_info "Creating command wrapper at $DOCKER_COMPOSE_CMD_PATH..."
 cat > "$DOCKER_COMPOSE_CMD_PATH" << EOF
-#!/data/data/com.termux/files/usr/bin/sh
+$WRAPPER_SHEBANG
 # Wrapper for docker_compose_cli.py
 INSTALL_DIR="$INSTALL_DIR"
 PYTHON_SCRIPT="\$INSTALL_DIR/android_docker/docker_compose_cli.py"

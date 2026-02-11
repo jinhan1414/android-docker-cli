@@ -107,6 +107,24 @@ jobs:
         shell: bash
         run: mkdir -p artifacts
 
+      - name: Install CLI from README command (deploy-repro only)
+        if: ${{ inputs.scope == 'deploy-repro' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Use a writable PREFIX in CI while still exercising installer-generated wrappers.
+          export PREFIX="$HOME/.local"
+          mkdir -p "$PREFIX/bin"
+          echo "$PREFIX/bin" >> "$GITHUB_PATH"
+
+          INSTALL_VERSION="${{ inputs.target_ref }}" \
+          curl -fsSL "https://raw.githubusercontent.com/jinhan1414/android-docker-cli/main/scripts/install.sh" | sh
+
+          command -v docker
+          command -v docker-compose
+          docker --help >/dev/null
+          docker-compose --help >/dev/null
+
       - name: Bootstrap proot without sudo (integration/deploy only)
         if: ${{ inputs.scope == 'integration' || inputs.scope == 'all' || inputs.scope == 'deploy-repro' }}
         shell: bash
@@ -179,56 +197,45 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          IMAGE="registry.cn-hangzhou.aliyuncs.com/hass-panel/hass-panel:latest"
+          WORK_DIR="$PWD/.repro-issue4"
+          COMPOSE_FILE="$WORK_DIR/docker-compose.yml"
+          LOG_FILE="$WORK_DIR/repro.log"
+          mkdir -p "$WORK_DIR/data"
+          printf "%s\n" \
+            "version: '3'" \
+            "services:" \
+            "  hass-panel:" \
+            "    container_name: hass-panel" \
+            "    image: ${IMAGE}" \
+            "    restart: unless-stopped" \
+            "    network_mode: host" \
+            "    volumes:" \
+            "      - ./data:/config/hass-panel" > "$COMPOSE_FILE"
+
+          export ANDROID_DATA=/data
+          export TERMUX_VERSION=ci-simulated
+          export PREFIX=/data/data/com.termux/files/usr
+          export ANDROID_DOCKER_FAKE_ROOT=${{ inputs.fake_root }}
+          export ANDROID_DOCKER_LINK2SYMLINK=0
+
           set +e
-
-          if [ -x scripts/repro_issue4_deploy.sh ]; then
-            if command -v timeout >/dev/null 2>&1; then
-              timeout --kill-after=30s 7m bash scripts/repro_issue4_deploy.sh > artifacts/deploy-repro.stdout.log 2>&1
-            else
-              bash scripts/repro_issue4_deploy.sh > artifacts/deploy-repro.stdout.log 2>&1
-            fi
-            code=$?
+          if command -v timeout >/dev/null 2>&1; then
+            timeout --kill-after=20s "${REPRO_TIMEOUT_SECONDS}s" \
+              docker-compose -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
           else
-            IMAGE="registry.cn-hangzhou.aliyuncs.com/hass-panel/hass-panel:latest"
-            WORK_DIR="$PWD/.repro-issue4"
-            CACHE_DIR="$PWD/.cache/issue4"
-            COMPOSE_FILE="$WORK_DIR/docker-compose.yml"
-            LOG_FILE="$WORK_DIR/repro.log"
-            mkdir -p "$WORK_DIR/data" "$CACHE_DIR"
-            printf "%s\n" \
-              "version: '3'" \
-              "services:" \
-              "  hass-panel:" \
-              "    container_name: hass-panel" \
-              "    image: ${IMAGE}" \
-              "    restart: unless-stopped" \
-              "    network_mode: host" \
-              "    volumes:" \
-              "      - ./data:/config/hass-panel" > "$COMPOSE_FILE"
-
-            export ANDROID_DATA=/data
-            export TERMUX_VERSION=ci-simulated
-            export PREFIX=/data/data/com.termux/files/usr
-            export ANDROID_DOCKER_FAKE_ROOT=${{ inputs.fake_root }}
-            export ANDROID_DOCKER_LINK2SYMLINK=0
-
-            if command -v timeout >/dev/null 2>&1; then
-              timeout --kill-after=20s "${REPRO_TIMEOUT_SECONDS}s" \
-                python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
-            else
-              python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
-            fi
-            cmd_code=$?
-
-            tail -n 120 "$LOG_FILE" > artifacts/deploy-repro.stdout.log || true
-            if grep -q "proot error: '/bin/bash' is not executable" "$LOG_FILE"; then
-              code=0
-            else
-              code=2
-            fi
-            echo "fallback compose exit code: ${cmd_code}" >> artifacts/deploy-repro.stdout.log
+            docker-compose -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
           fi
+          cmd_code=$?
           set -e
+
+          tail -n 120 "$LOG_FILE" > artifacts/deploy-repro.stdout.log || true
+          if grep -q "proot error: '/bin/bash' is not executable" "$LOG_FILE"; then
+            code=0
+          else
+            code=2
+          fi
+          echo "docker-compose exit code: ${cmd_code}" >> artifacts/deploy-repro.stdout.log
 
           expected="${{ inputs.deploy_expect }}"
           echo "deploy script exit code: ${code}, expected: ${expected}"

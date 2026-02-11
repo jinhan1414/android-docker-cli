@@ -11,12 +11,18 @@ fi
 
 IMAGE="${IMAGE:-registry.cn-hangzhou.aliyuncs.com/hass-panel/hass-panel:latest}"
 WORK_DIR="${WORK_DIR:-$PWD/.repro-issue4}"
-CACHE_DIR="${CACHE_DIR:-$PWD/.cache/issue4}"
 REPRO_TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-240}"
 COMPOSE_FILE="$WORK_DIR/docker-compose.yml"
 LOG_FILE="$WORK_DIR/repro.log"
 
-mkdir -p "$WORK_DIR/data" "$CACHE_DIR"
+if ! command -v docker-compose >/dev/null 2>&1; then
+  echo "ERROR: docker-compose command not found."
+  echo "Install with README command first:"
+  echo "  INSTALL_VERSION=main curl -sSL https://raw.githubusercontent.com/jinhan1414/android-docker-cli/main/scripts/install.sh | sh"
+  exit 1
+fi
+
+mkdir -p "$WORK_DIR/data"
 
 cat > "$COMPOSE_FILE" <<YAML
 version: '3'
@@ -40,15 +46,14 @@ export ANDROID_DOCKER_LINK2SYMLINK=0
 echo "== Reproducing issue #4 =="
 echo "Image: $IMAGE"
 echo "Compose: $COMPOSE_FILE"
-echo "Cache: $CACHE_DIR"
 echo "Timeout: ${REPRO_TIMEOUT_SECONDS}s"
 
 set +e
 if command -v timeout >/dev/null 2>&1; then
   timeout --kill-after=20s "${REPRO_TIMEOUT_SECONDS}s" \
-    python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
+    docker-compose -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
 else
-  python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
+  docker-compose -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
 fi
 exit_code=$?
 set -e
@@ -63,7 +68,7 @@ if grep -q "proot error: '/bin/bash' is not executable" "$LOG_FILE"; then
 fi
 
 echo "NOT REPRODUCED: target error not found."
-echo "docker_compose_cli exit code: $exit_code"
+echo "docker-compose exit code: $exit_code"
 if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
   echo "compose up reached timeout; treating as non-reproduced."
 fi
