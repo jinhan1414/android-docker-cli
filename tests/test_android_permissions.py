@@ -263,6 +263,68 @@ class TestAndroidFakeRootMode(unittest.TestCase):
         self.assertNotIn('-0', cmd, "Non-Android runs should not use fake-root by default")
 
 
+class TestAndroidSupervisordSocketPatch(unittest.TestCase):
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix='test_supervisor_patch_')
+        self.runner = ProotRunner(cache_dir=self.test_dir)
+        self.rootfs_dir = os.path.join(self.test_dir, 'rootfs')
+        os.makedirs(os.path.join(self.rootfs_dir, 'etc'), exist_ok=True)
+
+        self._orig_android = self.runner._is_android_environment
+        self.runner._is_android_environment = lambda: True
+
+        self._orig_env = os.environ.get(self.runner.DISABLE_SUPERVISOR_SOCKET_PATCH_ENV)
+
+    def tearDown(self):
+        self.runner._is_android_environment = self._orig_android
+
+        if self._orig_env is None:
+            os.environ.pop(self.runner.DISABLE_SUPERVISOR_SOCKET_PATCH_ENV, None)
+        else:
+            os.environ[self.runner.DISABLE_SUPERVISOR_SOCKET_PATCH_ENV] = self._orig_env
+
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def test_patches_supervisord_conf(self):
+        conf_path = os.path.join(self.rootfs_dir, 'etc', 'supervisord.conf')
+        Path(conf_path).write_text(
+            "[supervisord]\n"
+            "nodaemon=false\n"
+            "\n"
+            "[supervisorctl]\n"
+            "serverurl=unix:///var/run/supervisor.sock\n"
+            "\n"
+            "[unix_http_server]\n"
+            "file=/var/run/supervisor.sock\n"
+            "chmod=0700\n",
+            encoding='utf-8'
+        )
+
+        self.runner._maybe_patch_supervisord_socket(self.rootfs_dir)
+
+        patched = Path(conf_path).read_text(encoding='utf-8')
+        self.assertIn(";[supervisorctl]", patched)
+        self.assertIn(";serverurl=unix:///var/run/supervisor.sock", patched)
+        self.assertIn(";[unix_http_server]", patched)
+        self.assertIn(";file=/var/run/supervisor.sock", patched)
+
+    def test_can_disable_patch_via_env(self):
+        conf_path = os.path.join(self.rootfs_dir, 'etc', 'supervisord.conf')
+        Path(conf_path).write_text(
+            "[unix_http_server]\n"
+            "file=/var/run/supervisor.sock\n",
+            encoding='utf-8'
+        )
+
+        os.environ[self.runner.DISABLE_SUPERVISOR_SOCKET_PATCH_ENV] = '1'
+        self.runner._maybe_patch_supervisord_socket(self.rootfs_dir)
+
+        patched = Path(conf_path).read_text(encoding='utf-8')
+        self.assertIn("[unix_http_server]", patched)
+        self.assertIn("file=/var/run/supervisor.sock", patched)
+
+
 class TestCriticalFileValidation(unittest.TestCase):
     """测试关键文件验证"""
     

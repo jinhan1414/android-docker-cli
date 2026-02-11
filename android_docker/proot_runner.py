@@ -26,6 +26,7 @@ class ProotRunner:
     """使用proot运行容器的类，支持一条龙服务"""
 
     FAKE_ROOT_ENV = "ANDROID_DOCKER_FAKE_ROOT"
+    DISABLE_SUPERVISOR_SOCKET_PATCH_ENV = "ANDROID_DOCKER_DISABLE_SUPERVISOR_SOCKET_PATCH"
 
     def __init__(self, cache_dir=None):
         self.temp_dir = None
@@ -734,7 +735,84 @@ class ProotRunner:
             logger.debug(f"调整后的PATH: {env['PATH']}")
 
         return env
-    
+
+    def _maybe_patch_supervisord_socket(self, rootfs_dir):
+        """Android compatibility: disable supervisord unix socket sections when needed.
+
+        Some images (including those using Python supervisor) create unix domain sockets via a
+        hard-link strategy (os.link). On Android/Termux this can fail due to hard-link restrictions,
+        causing supervisord to loop printing "Unlinking stale socket ...".
+
+        This patch comments out [unix_http_server] and [supervisorctl] sections in supervisord.conf
+        so supervisord can still manage programs without creating a control socket.
+        """
+        if not self._is_android_environment():
+            return
+
+        if self._parse_env_bool(os.environ.get(self.DISABLE_SUPERVISOR_SOCKET_PATCH_ENV)) is True:
+            return
+
+        if not rootfs_dir:
+            return
+
+        candidate_paths = [
+            os.path.join(rootfs_dir, 'etc', 'supervisord.conf'),
+            os.path.join(rootfs_dir, 'etc', 'supervisor', 'supervisord.conf'),
+        ]
+
+        for config_path in candidate_paths:
+            if not os.path.exists(config_path):
+                continue
+
+            try:
+                with open(config_path, 'r', encoding='utf-8', errors='ignore') as handle:
+                    original = handle.read().splitlines(True)  # keep line endings
+            except OSError:
+                continue
+
+            # Fast check: only patch configs that define a unix socket control interface.
+            content_joined = ''.join(original)
+            if '[unix_http_server]' not in content_joined:
+                continue
+            if 'supervisor.sock' not in content_joined:
+                continue
+
+            changed = False
+            patched = []
+            current_section = None
+
+            for line in original:
+                stripped = line.strip()
+                if stripped.startswith('[') and stripped.endswith(']') and len(stripped) > 2:
+                    current_section = stripped[1:-1].strip().lower()
+
+                in_disabled_section = current_section in ('unix_http_server', 'supervisorctl')
+
+                if in_disabled_section and stripped and not stripped.startswith(('#', ';')):
+                    patched.append(';' + line)
+                    changed = True
+                else:
+                    patched.append(line)
+
+            if not changed:
+                continue
+
+            # Write a one-time backup for troubleshooting.
+            backup_path = config_path + '.android-docker-cli.bak'
+            try:
+                if not os.path.exists(backup_path):
+                    with open(backup_path, 'w', encoding='utf-8', errors='ignore') as handle:
+                        handle.write(''.join(original))
+            except OSError:
+                pass
+
+            try:
+                with open(config_path, 'w', encoding='utf-8', errors='ignore') as handle:
+                    handle.write(''.join(patched))
+                logger.info(f"Android兼容: 已禁用supervisord unix socket配置: {config_path}")
+            except OSError:
+                pass
+
     def run(self, input_path, args, rootfs_dir=None, pid_file=None):
         """运行容器（一条龙服务）"""
         log_file_handle = None
@@ -761,6 +839,9 @@ class ProotRunner:
 
             # 查找镜像配置
             self._find_image_config()
+
+            # Android compatibility patches for known runtime limitations.
+            self._maybe_patch_supervisord_socket(self.rootfs_dir)
 
             # 如果是后台运行模式，强制设置为非交互式
             if args.detach:
