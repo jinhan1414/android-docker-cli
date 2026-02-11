@@ -64,6 +64,7 @@ jobs:
       ANDROID_DOCKER_LINK2SYMLINK: "0"
       PIP_DISABLE_PIP_VERSION_CHECK: "1"
       PYTEST_ADDOPTS: "-ra"
+      REPRO_TIMEOUT_SECONDS: "240"
 
     steps:
       - name: Checkout

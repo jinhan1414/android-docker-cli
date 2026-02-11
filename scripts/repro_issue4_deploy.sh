@@ -12,6 +12,7 @@ fi
 IMAGE="${IMAGE:-registry.cn-hangzhou.aliyuncs.com/hass-panel/hass-panel:latest}"
 WORK_DIR="${WORK_DIR:-$PWD/.repro-issue4}"
 CACHE_DIR="${CACHE_DIR:-$PWD/.cache/issue4}"
+REPRO_TIMEOUT_SECONDS="${REPRO_TIMEOUT_SECONDS:-240}"
 COMPOSE_FILE="$WORK_DIR/docker-compose.yml"
 LOG_FILE="$WORK_DIR/repro.log"
 
@@ -40,9 +41,15 @@ echo "== Reproducing issue #4 =="
 echo "Image: $IMAGE"
 echo "Compose: $COMPOSE_FILE"
 echo "Cache: $CACHE_DIR"
+echo "Timeout: ${REPRO_TIMEOUT_SECONDS}s"
 
 set +e
-python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up 2>&1 | tee "$LOG_FILE"
+if command -v timeout >/dev/null 2>&1; then
+  timeout "${REPRO_TIMEOUT_SECONDS}s" \
+    python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up 2>&1 | tee "$LOG_FILE"
+else
+  python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up 2>&1 | tee "$LOG_FILE"
+fi
 exit_code=${PIPESTATUS[0]}
 set -e
 
@@ -53,5 +60,8 @@ fi
 
 echo "NOT REPRODUCED: target error not found."
 echo "docker_compose_cli exit code: $exit_code"
+if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ]; then
+  echo "compose up reached timeout; treating as non-reproduced."
+fi
 echo "log file: $LOG_FILE"
 exit 2
