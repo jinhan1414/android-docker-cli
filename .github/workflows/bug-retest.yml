@@ -221,6 +221,9 @@ jobs:
           SERVICE_CONTAINER="hass-panel"
           UP_LOG="$WORK_DIR/up.log"
           CONTAINER_LOG="$WORK_DIR/container.log"
+          CONTAINER_STATE_LOG="$WORK_DIR/container-state.log"
+          CONTAINER_INSPECT_LOG="$WORK_DIR/container-inspect.json"
+          CONTAINER_PS_LOG="$WORK_DIR/container-ps.log"
           DOWN_LOG="$WORK_DIR/down.log"
           LOG_WAIT_SECONDS=90
 
@@ -234,11 +237,35 @@ jobs:
           up_code=$?
 
           logs_code=127
+          inspect_code=127
+          ps_code=127
+          container_state="unknown"
+          container_exit_code="unknown"
+          running_observed=0
+          have_runtime_logs=0
           end_time=$((SECONDS + LOG_WAIT_SECONDS))
+          : > "$CONTAINER_STATE_LOG"
           while [ "${SECONDS}" -lt "${end_time}" ]; do
-            docker logs "$SERVICE_CONTAINER" >"$CONTAINER_LOG" 2>&1
+            docker ps -a --filter "name=^/${SERVICE_CONTAINER}$" --format '{{.ID}} {{.Status}}' >"$CONTAINER_PS_LOG" 2>&1
+            ps_code=$?
+            docker inspect "$SERVICE_CONTAINER" >"$CONTAINER_INSPECT_LOG" 2>&1
+            inspect_code=$?
+            container_state="$(docker inspect -f '{{.State.Status}}' "$SERVICE_CONTAINER" 2>/dev/null || echo unknown)"
+            container_exit_code="$(docker inspect -f '{{.State.ExitCode}}' "$SERVICE_CONTAINER" 2>/dev/null || echo unknown)"
+            if [ "$container_state" = "running" ]; then
+              running_observed=1
+            fi
+
+            docker logs --timestamps "$SERVICE_CONTAINER" >"$CONTAINER_LOG" 2>&1
             logs_code=$?
-            if [ "${logs_code}" -eq 0 ]; then
+            if [ "${logs_code}" -eq 0 ] && [ -s "$CONTAINER_LOG" ]; then
+              have_runtime_logs=1
+            fi
+
+            printf 't=%ss state=%s exit=%s logs_code=%s logs_nonempty=%s\n' \
+              "${SECONDS}" "${container_state}" "${container_exit_code}" "${logs_code}" "${have_runtime_logs}" >> "$CONTAINER_STATE_LOG"
+
+            if [ "${have_runtime_logs}" -eq 1 ] && [ "${inspect_code}" -eq 0 ]; then
               break
             fi
             sleep 2
@@ -257,12 +284,27 @@ jobs:
             tail -n 120 "$UP_LOG" 2>/dev/null || true
             echo "---- docker logs ${SERVICE_CONTAINER} (tail -n 120) ----"
             tail -n 120 "$CONTAINER_LOG" 2>/dev/null || true
+            echo "---- container state timeline (tail -n 120) ----"
+            tail -n 120 "$CONTAINER_STATE_LOG" 2>/dev/null || true
+            echo "---- docker ps -a snapshot ----"
+            cat "$CONTAINER_PS_LOG" 2>/dev/null || true
+            echo "---- docker inspect state summary ----"
+            echo "state: ${container_state}"
+            echo "exit_code: ${container_exit_code}"
+            echo "running_observed: ${running_observed}"
+            echo "have_runtime_logs: ${have_runtime_logs}"
             echo "---- docker-compose down (tail -n 120) ----"
             tail -n 120 "$DOWN_LOG" 2>/dev/null || true
             echo "up exit code: ${up_code}"
             echo "logs exit code: ${logs_code}"
+            echo "inspect exit code: ${inspect_code}"
+            echo "ps exit code: ${ps_code}"
             echo "down exit code: ${down_code}"
           } > artifacts/deploy-repro.stdout.log
+
+          if [ "${have_runtime_logs}" -ne 1 ]; then
+            echo "::warning::No non-empty container runtime log was captured before teardown."
+          fi
 
           if grep -q "proot error: '/bin/bash' is not executable" "$UP_LOG" || \
              grep -q "proot error: '/bin/bash' is not executable" "$CONTAINER_LOG"; then
@@ -298,6 +340,15 @@ jobs:
           fi
           if [ -f .repro-issue4/container.log ]; then
             cp .repro-issue4/container.log artifacts/deploy-repro-container.log
+          fi
+          if [ -f .repro-issue4/container-state.log ]; then
+            cp .repro-issue4/container-state.log artifacts/deploy-repro-container-state.log
+          fi
+          if [ -f .repro-issue4/container-ps.log ]; then
+            cp .repro-issue4/container-ps.log artifacts/deploy-repro-container-ps.log
+          fi
+          if [ -f .repro-issue4/container-inspect.json ]; then
+            cp .repro-issue4/container-inspect.json artifacts/deploy-repro-container-inspect.json
           fi
           if [ -f .repro-issue4/down.log ]; then
             cp .repro-issue4/down.log artifacts/deploy-repro-down.log

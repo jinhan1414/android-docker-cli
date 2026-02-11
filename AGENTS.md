@@ -28,7 +28,7 @@ When the user provides a production bug report for Android/Termux behavior, foll
    - Repro phase: `deploy_expect=reproduced`
    - Fix validation phase: `deploy_expect=fixed`
    - Execute via README install path and installed `docker` / `docker-compose` commands (avoid direct `python -m` for deploy replay).
-   - Use `docker-compose up -d` + container logs for assertion, then `docker-compose down` cleanup.
+   - Use `docker-compose up -d` + container logs and container state snapshots (`docker inspect`/`docker ps`) for assertion, then `docker-compose down` cleanup.
 5. Upload and inspect artifacts/logs for every run before concluding.
 
 Progressive disclosure:
