@@ -7,6 +7,11 @@ on:
         description: "Bug ID or short label (used in run name/log only)"
         required: true
         type: string
+      target_ref:
+        description: "Git ref to test (branch/tag/SHA)"
+        required: true
+        default: main
+        type: string
       scope:
         description: "Retest scope"
         required: true
@@ -41,6 +46,7 @@ on:
 
 run-name: >-
   bug:${{ inputs.bug_id }}
+  ref:${{ inputs.target_ref }}
   scope:${{ inputs.scope }}
   fake_root:${{ inputs.fake_root }}
 
@@ -69,6 +75,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.target_ref }}
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -172,12 +180,56 @@ jobs:
         run: |
           set -euo pipefail
           set +e
-          if command -v timeout >/dev/null 2>&1; then
-            timeout --kill-after=30s 7m bash scripts/repro_issue4_deploy.sh > artifacts/deploy-repro.stdout.log 2>&1
+
+          if [ -x scripts/repro_issue4_deploy.sh ]; then
+            if command -v timeout >/dev/null 2>&1; then
+              timeout --kill-after=30s 7m bash scripts/repro_issue4_deploy.sh > artifacts/deploy-repro.stdout.log 2>&1
+            else
+              bash scripts/repro_issue4_deploy.sh > artifacts/deploy-repro.stdout.log 2>&1
+            fi
+            code=$?
           else
-            bash scripts/repro_issue4_deploy.sh > artifacts/deploy-repro.stdout.log 2>&1
+            IMAGE="registry.cn-hangzhou.aliyuncs.com/hass-panel/hass-panel:latest"
+            WORK_DIR="$PWD/.repro-issue4"
+            CACHE_DIR="$PWD/.cache/issue4"
+            COMPOSE_FILE="$WORK_DIR/docker-compose.yml"
+            LOG_FILE="$WORK_DIR/repro.log"
+            mkdir -p "$WORK_DIR/data" "$CACHE_DIR"
+
+            cat > "$COMPOSE_FILE" <<YAML
+            version: '3'
+            services:
+              hass-panel:
+                container_name: hass-panel
+                image: ${IMAGE}
+                restart: unless-stopped
+                network_mode: host
+                volumes:
+                  - ./data:/config/hass-panel
+            YAML
+
+            export ANDROID_DATA=/data
+            export TERMUX_VERSION=ci-simulated
+            export PREFIX=/data/data/com.termux/files/usr
+            export ANDROID_DOCKER_FAKE_ROOT=${{ inputs.fake_root }}
+            export ANDROID_DOCKER_LINK2SYMLINK=0
+
+            if command -v timeout >/dev/null 2>&1; then
+              timeout --kill-after=20s "${REPRO_TIMEOUT_SECONDS}s" \
+                python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
+            else
+              python -m android_docker.docker_compose_cli --cache-dir "$CACHE_DIR" -f "$COMPOSE_FILE" up >"$LOG_FILE" 2>&1
+            fi
+            cmd_code=$?
+
+            tail -n 120 "$LOG_FILE" > artifacts/deploy-repro.stdout.log || true
+            if grep -q "proot error: '/bin/bash' is not executable" "$LOG_FILE"; then
+              code=0
+            else
+              code=2
+            fi
+            echo "fallback compose exit code: ${cmd_code}" >> artifacts/deploy-repro.stdout.log
           fi
-          code=$?
           set -e
 
           expected="${{ inputs.deploy_expect }}"
