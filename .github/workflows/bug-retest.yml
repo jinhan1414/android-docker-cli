@@ -1,0 +1,209 @@
+name: Bug Retest (Android-Constrained Simulation)
+
+on:
+  workflow_dispatch:
+    inputs:
+      bug_id:
+        description: "Bug ID or short label (used in run name/log only)"
+        required: true
+        type: string
+      scope:
+        description: "Retest scope"
+        required: true
+        default: permissions
+        type: choice
+        options:
+          - permissions
+          - integration
+          - deploy-repro
+          - all
+      pytest_k:
+        description: "Optional pytest -k expression (for targeted bug retest)"
+        required: false
+        default: ""
+        type: string
+      fake_root:
+        description: "Simulate Android fake-root mode"
+        required: true
+        default: "1"
+        type: choice
+        options:
+          - "1"
+          - "0"
+      deploy_expect:
+        description: "Only for deploy-repro: expected outcome"
+        required: true
+        default: reproduced
+        type: choice
+        options:
+          - reproduced
+          - fixed
+
+run-name: >-
+  bug:${{ inputs.bug_id }}
+  scope:${{ inputs.scope }}
+  fake_root:${{ inputs.fake_root }}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bug-retest-${{ github.workflow }}-${{ inputs.bug_id }}
+  cancel-in-progress: true
+
+jobs:
+  retest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      ANDROID_DATA: /data
+      TERMUX_VERSION: ci-simulated
+      PREFIX: /data/data/com.termux/files/usr
+      ANDROID_DOCKER_FAKE_ROOT: ${{ inputs.fake_root }}
+      ANDROID_DOCKER_LINK2SYMLINK: "0"
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+      PYTEST_ADDOPTS: "-ra"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Enforce non-root execution
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "uid=$(id -u) user=$(id -un)"
+          if [ "$(id -u)" -eq 0 ]; then
+            echo "::error::CI retest must run as non-root to mirror Android constraints."
+            exit 1
+          fi
+
+      - name: Install dependencies (non-root)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install PyYAML
+
+      - name: Ensure local artifact directory
+        shell: bash
+        run: mkdir -p artifacts
+
+      - name: Bootstrap proot without sudo (integration/deploy only)
+        if: ${{ inputs.scope == 'integration' || inputs.scope == 'all' || inputs.scope == 'deploy-repro' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v proot >/dev/null 2>&1; then
+            proot --version || true
+            exit 0
+          fi
+
+          echo "proot not found; trying user-space bootstrap via apt package download..."
+          workdir="${RUNNER_TEMP}/proot_pkg"
+          mkdir -p "${workdir}" "$HOME/.local/bin"
+          cd "${workdir}"
+
+          if command -v apt-get >/dev/null 2>&1; then
+            apt-get download proot || true
+          fi
+
+          deb_file="$(ls -1 proot_*_amd64.deb 2>/dev/null | head -n1 || true)"
+          if [ -n "${deb_file}" ] && command -v dpkg-deb >/dev/null 2>&1; then
+            dpkg-deb -x "${deb_file}" extracted
+            if [ -x extracted/usr/bin/proot ]; then
+              cp extracted/usr/bin/proot "$HOME/.local/bin/proot"
+              chmod +x "$HOME/.local/bin/proot"
+              echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+            fi
+          fi
+
+          if command -v proot >/dev/null 2>&1; then
+            proot --version || true
+            exit 0
+          fi
+
+          echo "::error::proot is required for integration scope but is unavailable without root-level package install."
+          echo "::error::Use permissions scope, or provide an environment where proot is preinstalled."
+          exit 2
+
+      - name: Run permissions retest
+        if: ${{ inputs.scope == 'permissions' || inputs.scope == 'all' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          k_expr="${{ inputs.pytest_k }}"
+          if [ -n "${k_expr}" ]; then
+            python -m pytest tests/test_android_permissions.py -v -k "${k_expr}" \
+              --junitxml=artifacts/permissions.xml
+          else
+            python -m pytest tests/test_android_permissions.py -v \
+              --junitxml=artifacts/permissions.xml
+          fi
+
+      - name: Run integration retest
+        if: ${{ inputs.scope == 'integration' || inputs.scope == 'all' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          k_expr="${{ inputs.pytest_k }}"
+          if [ -n "${k_expr}" ]; then
+            python -m pytest tests/test_android_integration.py -v -s -k "${k_expr}" \
+              --junitxml=artifacts/integration.xml
+          else
+            python -m pytest tests/test_android_integration.py -v -s \
+              --junitxml=artifacts/integration.xml
+          fi
+
+      - name: Run deploy-path issue retest
+        if: ${{ inputs.scope == 'deploy-repro' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          bash scripts/repro_issue4_deploy.sh 2>&1 | tee artifacts/deploy-repro.stdout.log
+          code=${PIPESTATUS[0]}
+          set -e
+
+          expected="${{ inputs.deploy_expect }}"
+          echo "deploy script exit code: ${code}, expected: ${expected}"
+
+          if [ "${expected}" = "reproduced" ] && [ "${code}" -eq 0 ]; then
+            echo "Result matches expectation: issue reproduced."
+            exit 0
+          fi
+
+          if [ "${expected}" = "fixed" ] && [ "${code}" -eq 2 ]; then
+            echo "Result matches expectation: issue not reproduced (fixed)."
+            exit 0
+          fi
+
+          echo "::error::Deploy repro result does not match expected outcome."
+          exit 1
+
+      - name: Collect deploy repro logs
+        if: ${{ always() && inputs.scope == 'deploy-repro' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f .repro-issue4/repro.log ]; then
+            cp .repro-issue4/repro.log artifacts/deploy-repro.log
+          fi
+
+      - name: Upload retest artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bug-retest-${{ inputs.bug_id }}-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 3
