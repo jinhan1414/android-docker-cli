@@ -196,6 +196,57 @@ class TestAndroidHostsBind(unittest.TestCase):
             self.runner._is_android_environment = original_method
 
 
+class TestAndroidResolvBind(unittest.TestCase):
+    """测试Android resolv.conf绑定"""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix='test_resolv_')
+        self.runner = ProotRunner(cache_dir=self.test_dir)
+        self.rootfs_dir = os.path.join(self.test_dir, 'rootfs')
+        os.makedirs(self.rootfs_dir, exist_ok=True)
+
+        self._orig_android = self.runner._is_android_environment
+        self.runner._is_android_environment = lambda: True
+
+        self._orig_get_dns = self.runner._get_android_dns_properties
+
+    def tearDown(self):
+        self.runner._is_android_environment = self._orig_android
+        self.runner._get_android_dns_properties = self._orig_get_dns
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def test_filters_loopback_and_uses_fallback_dns(self):
+        self.runner._get_android_dns_properties = lambda: ['::1', '127.0.0.1']
+
+        bind_spec = self.runner._prepare_android_resolv_bind(self.rootfs_dir)
+        expected_path = os.path.join(self.test_dir, 'writable_dirs', 'etc_resolv.conf')
+        self.assertEqual(bind_spec, f"{expected_path}:/etc/resolv.conf")
+
+        content = Path(expected_path).read_text(encoding='utf-8')
+        self.assertIn('nameserver 1.1.1.1', content)
+        self.assertNotIn('::1', content)
+        self.assertNotIn('127.0.0.1', content)
+
+    def test_build_proot_command_uses_generated_resolv_bind(self):
+        os.makedirs(os.path.join(self.rootfs_dir, 'bin'), exist_ok=True)
+        Path(os.path.join(self.rootfs_dir, 'bin', 'sh')).touch()
+        self.runner.rootfs_dir = self.rootfs_dir
+        self.runner._get_android_dns_properties = lambda: ['8.8.8.8']
+
+        class Args:
+            detach = False
+            bind = []
+            workdir = None
+            env = []
+            command = []
+            fake_root = None
+
+        cmd = self.runner._build_proot_command(Args())
+        self.assertNotIn('/system/etc/resolv.conf:/etc/resolv.conf', cmd)
+        self.assertTrue(any(item.endswith(':/etc/resolv.conf') for item in cmd))
+
+
 class TestAndroidFakeRootMode(unittest.TestCase):
     """Test Android default fake-root behavior and escape hatch."""
 

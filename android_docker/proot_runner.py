@@ -16,6 +16,7 @@ import logging
 import hashlib
 import shlex
 import time
+import ipaddress
 from pathlib import Path
 
 # 配置日志
@@ -408,7 +409,6 @@ class ProotRunner:
         if self._is_android_environment():
             default_binds.extend([
                 '/sdcard',
-                '/system/etc/resolv.conf:/etc/resolv.conf'
             ])
 
             # 添加可写系统目录绑定
@@ -419,11 +419,14 @@ class ProotRunner:
                 hosts_bind = self._prepare_android_hosts_bind(self.rootfs_dir)
                 if hosts_bind:
                     default_binds.append(hosts_bind)
+                resolv_bind = self._prepare_android_resolv_bind(self.rootfs_dir)
+                if resolv_bind:
+                    default_binds.append(resolv_bind)
                 logger.info("已启用Android可写目录支持")
 
         for bind in default_binds:
             if ':' in bind:
-                src, dst = bind.split(':', 1)
+                src, dst = bind.rsplit(':', 1)
                 if os.path.exists(src):
                     cmd.extend(['-b', bind])
             else:
@@ -793,6 +796,115 @@ class ProotRunner:
             return None
 
         return f"{host_hosts_path}:/etc/hosts"
+
+    @staticmethod
+    def _is_localhost_dns_server(server):
+        """Return True when a DNS server points to loopback/unspecified addresses."""
+        if not server:
+            return True
+
+        normalized = str(server).strip()
+        if '%' in normalized:
+            normalized = normalized.split('%', 1)[0]
+
+        try:
+            addr = ipaddress.ip_address(normalized)
+        except ValueError:
+            return True
+
+        return addr.is_loopback or addr.is_unspecified
+
+    @staticmethod
+    def _read_nameservers_from_resolv(path):
+        """Read nameserver entries from a resolv.conf style file."""
+        nameservers = []
+        if not path or not os.path.exists(path):
+            return nameservers
+
+        try:
+            with open(path, 'r', encoding='utf-8', errors='ignore') as handle:
+                for line in handle:
+                    stripped = line.strip()
+                    if not stripped or stripped.startswith('#'):
+                        continue
+                    parts = stripped.split()
+                    if len(parts) >= 2 and parts[0].lower() == 'nameserver':
+                        nameservers.append(parts[1])
+        except OSError as exc:
+            logger.debug(f"Failed to read resolv file {path}: {exc}")
+
+        return nameservers
+
+    def _get_android_dns_properties(self):
+        """Best-effort DNS server discovery from Android system properties."""
+        keys = ('net.dns1', 'net.dns2', 'net.dns3', 'net.dns4')
+        values = []
+
+        for key in keys:
+            try:
+                result = subprocess.run(
+                    ['getprop', key],
+                    capture_output=True,
+                    text=True,
+                    timeout=2,
+                )
+            except Exception:
+                continue
+
+            value = (result.stdout or '').strip()
+            if value:
+                values.append(value)
+
+        return values
+
+    def _prepare_android_resolv_bind(self, rootfs_dir):
+        """Create Android /etc/resolv.conf bind.
+
+        Default behavior: pin DNS to 1.1.1.1 for stability.
+        Override: set ANDROID_DOCKER_DNS (comma/space separated).
+        """
+        if not rootfs_dir:
+            return None
+
+        parent_dir = os.path.dirname(rootfs_dir) if os.path.dirname(rootfs_dir) else rootfs_dir
+        writable_storage = os.path.join(parent_dir, 'writable_dirs')
+        os.makedirs(writable_storage, exist_ok=True)
+
+        host_resolv_path = os.path.join(writable_storage, 'etc_resolv.conf')
+        dns_servers = []
+
+        def add_servers(candidates):
+            for candidate in candidates:
+                value = str(candidate).strip()
+                if not value:
+                    continue
+                if self._is_localhost_dns_server(value):
+                    continue
+                if value in dns_servers:
+                    continue
+                dns_servers.append(value)
+
+        env_dns = os.environ.get('ANDROID_DOCKER_DNS', '')
+        if env_dns:
+            add_servers(env_dns.replace(',', ' ').split())
+        if not dns_servers:
+            dns_servers = ['1.1.1.1']
+            logger.info("Android DNS固定为 1.1.1.1（可通过 ANDROID_DOCKER_DNS 覆盖）")
+
+        lines = [f'nameserver {server}' for server in dns_servers]
+
+        try:
+            with open(host_resolv_path, 'w', encoding='utf-8') as handle:
+                handle.write('\n'.join(lines) + '\n')
+            try:
+                os.chmod(host_resolv_path, 0o644)
+            except OSError:
+                pass
+        except OSError as exc:
+            logger.debug(f"Failed to write resolv file {host_resolv_path}: {exc}")
+            return None
+
+        return f"{host_resolv_path}:/etc/resolv.conf"
 
     def _prepare_environment(self):
         """准备运行环境，处理Android Termux特殊问题"""
