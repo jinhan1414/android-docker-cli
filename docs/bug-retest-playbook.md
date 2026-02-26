@@ -7,6 +7,7 @@ This document defines the default mechanism to reproduce and verify Android/Term
 - Project: `android-docker-cli`
 - Goal: reproducible bug replay and fix regression verification in CI
 - Constraint: CI execution must remain non-root to mirror Android user-space limits
+- Policy: all subsequent bug fixes MUST follow this playbook end-to-end (repro baseline -> code fix -> fix validation), unless the user explicitly opts out.
 
 ## Workflow
 
@@ -43,6 +44,7 @@ This document defines the default mechanism to reproduce and verify Android/Term
 5. Verify fix
 - Re-run same workflow with same bug input but `deploy_expect=fixed`.
 - Validate job conclusion and inspect uploaded artifacts/log tails.
+- Do not conclude a bug fix as completed before this verification step is done.
 
 ## CI Notes
 

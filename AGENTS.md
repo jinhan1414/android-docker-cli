@@ -21,6 +21,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 When the user provides a production bug report for Android/Termux behavior, follow this workflow by default:
 
+0. Mandatory rule: for all subsequent bug fixes in this repository, execute Bug Retest Memory before and after code changes (repro first, then fix validation), unless the user explicitly opts out.
 1. Convert the report into an automated repro assertion first (script/test) before changing runtime logic.
 2. Use GitHub Actions workflow `Bug Retest (Android-Constrained Simulation)` for repro and regression checks.
 3. Keep non-root execution constraints in CI (Android-like limitation).

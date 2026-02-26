@@ -110,6 +110,12 @@ class DockerCLI:
         """获取日志文件路径"""
         return os.path.join(container_dir, 'container.log')
 
+    def _mark_container_exited(self, container_info):
+        """将容器状态标记为已退出并写入结束时间"""
+        container_info['status'] = 'exited'
+        container_info['finished'] = time.time()
+        container_info['finished_str'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
             
     def login(self, server, username, password):
         """登录到Docker Registry"""
@@ -427,8 +433,17 @@ class DockerCLI:
         status = container_info.get('status')
 
         if status == 'running':
-            logger.error(f"容器 {container_id} 已经在运行")
-            return False
+            pid = container_info.get('pid')
+            if pid and self._is_process_running(pid):
+                logger.error(f"容器 {container_id} 已经在运行")
+                return False
+            logger.warning(
+                f"容器 {container_id} 状态为 running 但无有效进程信息，自动更正为 exited 后继续启动。"
+            )
+            self._mark_container_exited(container_info)
+            containers[container_id] = container_info
+            self._save_containers(containers)
+            status = container_info.get('status')
 
         if status not in ['created', 'exited', 'killed', 'interrupted', 'failed']:
             logger.error(f"无法启动处于 '{status}' 状态的容器 {container_id}")
@@ -442,14 +457,31 @@ class DockerCLI:
         is_detached = container_info.get('detached', False)
         container_dir = container_info.get('container_dir')
 
-        if not container_dir or not os.path.exists(container_dir):
-            logger.error(f"找不到容器 {container_id} 的数据目录。")
-            return False
+        if not container_dir:
+            container_dir = self._get_container_dir(container_id)
+            container_info['container_dir'] = container_dir
+            containers[container_id] = container_info
+            self._save_containers(containers)
+            logger.warning(f"容器 {container_id} 缺少 container_dir 元数据，已重建为: {container_dir}")
+
+        if not os.path.exists(container_dir):
+            try:
+                os.makedirs(container_dir, exist_ok=True)
+                logger.warning(f"容器 {container_id} 的数据目录缺失，已重建: {container_dir}")
+            except OSError as exc:
+                logger.error(f"无法重建容器 {container_id} 的数据目录: {exc}")
+                return False
 
         rootfs_dir = os.path.join(container_dir, 'rootfs')
         if not os.path.exists(rootfs_dir):
-            logger.error(f"找不到容器 {container_id} 的根文件系统。")
-            return False
+            try:
+                os.makedirs(rootfs_dir, exist_ok=True)
+                logger.warning(
+                    f"容器 {container_id} 的根文件系统目录缺失，已重建目录并将在启动时从镜像缓存重新解压。"
+                )
+            except OSError as exc:
+                logger.error(f"无法重建容器 {container_id} 的根文件系统目录: {exc}")
+                return False
 
         # 清理旧的锁文件，这是关键修复
         self._cleanup_stale_lock_files(rootfs_dir)
@@ -696,15 +728,14 @@ class DockerCLI:
             if info.get('status') == 'running' and info.get('pid'):
                 # 对于通过新方法启动的容器，pid是proot进程的真实pid
                 if not self._is_process_running(info['pid']):
-                    info['status'] = 'exited'
-                    info['finished'] = time.time()
-                    info['finished_str'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    self._mark_container_exited(info)
+            elif info.get('status') == 'running' and not info.get('pid'):
+                # 进程ID缺失通常意味着上次前台运行被异常终止，避免僵尸“running”状态
+                self._mark_container_exited(info)
             elif info.get('status') == 'running' and info.get('script_path'):
                  # 兼容旧的、通过wrapper script启动的容器
                 if not self._is_process_running(info['pid']):
-                    info['status'] = 'exited'
-                    info['finished'] = time.time()
-                    info['finished_str'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    self._mark_container_exited(info)
 
         
         self._save_containers(containers)

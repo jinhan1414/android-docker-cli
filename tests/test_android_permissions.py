@@ -19,6 +19,7 @@ from pathlib import Path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from android_docker.create_rootfs_tar import DockerImageToRootFS
+from android_docker.docker_cli import DockerCLI
 from android_docker.proot_runner import ProotRunner
 
 
@@ -695,6 +696,56 @@ class TestContainerCleanup(unittest.TestCase):
         # 验证目录被删除
         self.assertFalse(os.path.exists(container_dir))
         self.assertFalse(os.path.exists(writable_dirs))
+
+
+class TestContainerStartRecoveryIssue5(unittest.TestCase):
+    """Issue #5: 运行状态脏数据 + rootfs 目录缺失时的启动恢复"""
+
+    def setUp(self):
+        self.test_dir = tempfile.mkdtemp(prefix='test_issue5_')
+        self.cli = DockerCLI(cache_dir=self.test_dir)
+
+    def tearDown(self):
+        if os.path.exists(self.test_dir):
+            shutil.rmtree(self.test_dir)
+
+    def test_issue5_start_rebuilds_missing_rootfs_for_stale_running_status(self):
+        container_id = 'issue5-container'
+        container_dir = self.cli._get_container_dir(container_id)
+        os.makedirs(container_dir, exist_ok=True)
+
+        containers = {
+            container_id: {
+                'id': container_id,
+                'image': 'alpine:latest',
+                'name': container_id,
+                'command': [],
+                'created': 0,
+                'created_str': '2026-02-15 20:50:12',
+                'status': 'running',
+                'pid': None,
+                'container_dir': container_dir,
+                'detached': True,
+                'run_args': {},
+            }
+        }
+        self.cli._save_containers(containers)
+        expected_rootfs_dir = os.path.join(container_dir, 'rootfs')
+
+        def fake_run_detached(image_url, args, cid, cdir):
+            self.assertEqual(cid, container_id)
+            self.assertEqual(cdir, container_dir)
+            self.assertTrue(os.path.isdir(expected_rootfs_dir))
+            saved = self.cli._load_containers()
+            saved[cid]['status'] = 'running'
+            saved[cid]['pid'] = 12345
+            self.cli._save_containers(saved)
+            return True
+
+        self.cli._run_detached = fake_run_detached
+        success = self.cli.start(container_id)
+        self.assertTrue(success)
+        self.assertTrue(os.path.isdir(expected_rootfs_dir))
 
 
 if __name__ == '__main__':
